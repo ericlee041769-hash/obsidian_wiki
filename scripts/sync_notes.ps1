@@ -23,6 +23,12 @@ function Write-Utf8File {
     [System.IO.File]::WriteAllText($Path, $Content, $utf8Bom)
 }
 
+function Get-NavIndent {
+    param([int]$Level)
+
+    return (" " * (2 + ($Level * 4)))
+}
+
 function To-ForwardSlash {
     param([string]$Value)
 
@@ -307,6 +313,165 @@ function Generate-ProjectsIndex {
     Write-Utf8File -Path (Join-Path $projectsRoot "index.md") -Content ($lines -join "`r`n")
 }
 
+function Add-ProjectDocNavEntries {
+    param(
+        [System.Collections.Generic.List[string]]$Lines,
+        [string[]]$RelativePaths,
+        [string]$ProjectName,
+        [int]$Level,
+        [string]$PathPrefix = ""
+    )
+
+    $files = @()
+    $directories = @()
+
+    foreach ($relativePath in $RelativePaths) {
+        $remainingPath = $relativePath
+
+        if (-not [string]::IsNullOrWhiteSpace($PathPrefix)) {
+            $prefix = "$PathPrefix/"
+            if (-not $relativePath.StartsWith($prefix)) {
+                continue
+            }
+
+            $remainingPath = $relativePath.Substring($prefix.Length)
+        }
+
+        if ([string]::IsNullOrWhiteSpace($remainingPath)) {
+            continue
+        }
+
+        $parts = $remainingPath -split '/', 2
+        if ($parts.Count -eq 1) {
+            $files += $parts[0]
+        } else {
+            $directories += $parts[0]
+        }
+    }
+
+    foreach ($fileName in @($files | Sort-Object -Unique)) {
+        $title = [System.IO.Path]::GetFileNameWithoutExtension($fileName)
+        $relativeDocPath = if ([string]::IsNullOrWhiteSpace($PathPrefix)) {
+            $fileName
+        } else {
+            "$PathPrefix/$fileName"
+        }
+
+        $Lines.Add(("{0}- {1}: 项目/{2}/文档/{3}" -f (Get-NavIndent $Level), $title, $ProjectName, $relativeDocPath))
+    }
+
+    foreach ($directoryName in @($directories | Sort-Object -Unique)) {
+        $Lines.Add(("{0}- {1}:" -f (Get-NavIndent $Level), $directoryName))
+
+        $nextPrefix = if ([string]::IsNullOrWhiteSpace($PathPrefix)) {
+            $directoryName
+        } else {
+            "$PathPrefix/$directoryName"
+        }
+
+        Add-ProjectDocNavEntries -Lines $Lines -RelativePaths $RelativePaths -ProjectName $ProjectName -Level ($Level + 1) -PathPrefix $nextPrefix
+    }
+}
+
+function Write-MkDocsConfig {
+    param([object[]]$ProjectInfos)
+
+    $lines = New-Object System.Collections.Generic.List[string]
+
+    @(
+        "site_name: 工作项目文档站",
+        "site_description: 把 Obsidian 工作目录中的项目文档发布为可在线浏览的站点",
+        "site_author: Eric Lee",
+        "",
+        "theme:",
+        "  name: material",
+        "  language: zh",
+        "  features:",
+        "    - navigation.indexes",
+        "    - navigation.sections",
+        "    - navigation.expand",
+        "    - navigation.top",
+        "    - navigation.path",
+        "    - navigation.footer",
+        "    - search.highlight",
+        "    - search.suggest",
+        "    - content.code.copy",
+        "    - content.tabs.link",
+        "    - toc.follow",
+        "  palette:",
+        "    - scheme: default",
+        "      primary: teal",
+        "      accent: amber",
+        "      toggle:",
+        "        icon: material/weather-night",
+        "        name: 切换到深色模式",
+        "    - scheme: slate",
+        "      primary: teal",
+        "      accent: amber",
+        "      toggle:",
+        "        icon: material/weather-sunny",
+        "        name: 切换到浅色模式",
+        "",
+        "plugins:",
+        "  - search",
+        "",
+        "extra_css:",
+        "  - stylesheets/extra.css",
+        "",
+        "markdown_extensions:",
+        "  - admonition",
+        "  - attr_list",
+        "  - def_list",
+        "  - footnotes",
+        "  - md_in_html",
+        "  - tables",
+        "  - toc:",
+        "      permalink: true",
+        "  - pymdownx.details",
+        "  - pymdownx.highlight:",
+        "      anchor_linenums: true",
+        "  - pymdownx.inlinehilite",
+        "  - pymdownx.snippets",
+        "  - pymdownx.superfences",
+        "  - pymdownx.tabbed:",
+        "      alternate_style: true",
+        "",
+        "nav:"
+    ) | ForEach-Object {
+        $lines.Add($_)
+    }
+
+    $lines.Add(("{0}- 首页: index.md" -f (Get-NavIndent 0)))
+    $lines.Add(("{0}- 工作项目总览: 项目/index.md" -f (Get-NavIndent 0)))
+
+    foreach ($projectInfo in @($ProjectInfos | Sort-Object Name)) {
+        $projectName = $projectInfo.Name
+        $markdownRelativePaths = @($projectInfo.MarkdownEntries | Sort-Object RelativePath | ForEach-Object { $_.RelativePath })
+
+        $lines.Add(("{0}- {1}:" -f (Get-NavIndent 0), $projectName))
+        $lines.Add(("{0}- 项目主页: 项目/{1}/index.md" -f (Get-NavIndent 1), $projectName))
+
+        if ($projectInfo.ExtraPages.Count -gt 0) {
+            $lines.Add(("{0}- 补充页:" -f (Get-NavIndent 1)))
+
+            foreach ($page in @($projectInfo.ExtraPages | Sort-Object Name)) {
+                $pageTitle = [System.IO.Path]::GetFileNameWithoutExtension($page.Name)
+                $lines.Add(("{0}- {1}: 项目/{2}/{3}" -f (Get-NavIndent 2), $pageTitle, $projectName, $page.Name))
+            }
+        }
+
+        if ($markdownRelativePaths.Count -gt 0) {
+            $lines.Add(("{0}- 文档:" -f (Get-NavIndent 1)))
+            Add-ProjectDocNavEntries -Lines $lines -RelativePaths $markdownRelativePaths -ProjectName $projectName -Level 2
+        }
+    }
+
+    $lines.Add(("{0}- 站点维护:" -f (Get-NavIndent 0)))
+    $lines.Add(("{0}- 发布与同步: 站点维护/发布与同步.md" -f (Get-NavIndent 1)))
+
+    Write-Utf8File -Path (Join-Path $projectRoot "mkdocs.yml") -Content ($lines -join "`r`n")
+}
+
 if (-not (Test-Path $SourceRoot)) {
     throw "源目录不存在：$SourceRoot"
 }
@@ -350,10 +515,13 @@ foreach ($projectDirectory in $projectDirectories) {
     $projectInfos += [PSCustomObject]@{
         Name          = $projectName
         MarkdownCount = $markdownEntries.Count
+        MarkdownEntries = $markdownEntries
+        ExtraPages    = $extraPages
     }
 }
 
 Generate-ProjectsIndex -ProjectInfos $projectInfos
+Write-MkDocsConfig -ProjectInfos $projectInfos
 
 Write-Host ("同步完成：{0} -> {1}" -f $SourceRoot, $projectsRoot)
 Write-Host ("项目数量：{0}" -f $projectInfos.Count)
