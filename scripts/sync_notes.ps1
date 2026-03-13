@@ -7,6 +7,7 @@ $ErrorActionPreference = "Stop"
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $docsRoot = Join-Path $projectRoot "docs"
 $projectsRoot = Join-Path $docsRoot "项目"
+$supplementFolderName = "补充页"
 $utf8Bom = New-Object System.Text.UTF8Encoding($true)
 
 function Write-Utf8File {
@@ -68,7 +69,31 @@ function Get-RelativePath {
     $toUri = New-Object System.Uri($toFullPath)
     $relativeUri = $fromUri.MakeRelativeUri($toUri)
 
-    return [System.Uri]::UnescapeDataString($relativeUri.ToString()) -replace '/', '\'
+    return [System.Uri]::UnescapeDataString($relativeUri.ToString())
+}
+
+function Get-OutputPathInfo {
+    param([string]$ProjectRelativePath)
+
+    $normalizedPath = To-ForwardSlash $ProjectRelativePath
+    $supplementPrefix = "$supplementFolderName/"
+
+    if ($normalizedPath.StartsWith($supplementPrefix)) {
+        $navRelativePath = $normalizedPath.Substring($supplementPrefix.Length)
+        return [PSCustomObject]@{
+            Category         = "supplement"
+            OutputRelative   = "$supplementFolderName/$navRelativePath"
+            NavRelativePath  = $navRelativePath
+            SectionLabel     = $supplementFolderName
+        }
+    }
+
+    return [PSCustomObject]@{
+        Category         = "document"
+        OutputRelative   = "文档/$normalizedPath"
+        NavRelativePath  = $normalizedPath
+        SectionLabel     = "文档"
+    }
 }
 
 function Get-ProjectMarkdownEntries {
@@ -80,12 +105,16 @@ function Get-ProjectMarkdownEntries {
     foreach ($file in $files) {
         $relativePath = Get-RelativePath -FromDirectory $ProjectSourceRoot -ToPath $file.FullName
         $relativePath = To-ForwardSlash $relativePath
+        $outputInfo = Get-OutputPathInfo -ProjectRelativePath $relativePath
 
         $entries += [PSCustomObject]@{
-            SourceFullName = $file.FullName
-            RelativePath   = $relativePath
-            StemRelative   = Get-StemPath $relativePath
-            BaseName       = [System.IO.Path]::GetFileNameWithoutExtension($file.Name)
+            SourceFullName   = $file.FullName
+            RelativePath     = $relativePath
+            StemRelative     = Get-StemPath $relativePath
+            BaseName         = [System.IO.Path]::GetFileNameWithoutExtension($file.Name)
+            Category         = $outputInfo.Category
+            OutputRelative   = $outputInfo.OutputRelative
+            NavRelativePath  = $outputInfo.NavRelativePath
         }
     }
 
@@ -170,7 +199,7 @@ function Convert-WikiLinks {
             return "[{0}]({1})" -f $label, $resolved.Anchor
         }
 
-        $targetOutputPath = Join-Path $ProjectOutputRoot (Join-Path "文档" ($resolved.Entry.RelativePath -replace '/', '\'))
+        $targetOutputPath = Join-Path $ProjectOutputRoot ($resolved.Entry.OutputRelative -replace '/', '\\')
         $currentDirectory = Split-Path -Parent $CurrentTargetPath
         $relativeLink = Get-RelativePath -FromDirectory $currentDirectory -ToPath $targetOutputPath
         $relativeLink = To-ForwardSlash $relativeLink
@@ -192,7 +221,9 @@ function Copy-ProjectFile {
     )
 
     $relativePath = Get-RelativePath -FromDirectory $ProjectSourceRoot -ToPath $File.FullName
-    $targetPath = Join-Path $ProjectOutputRoot (Join-Path "文档" $relativePath)
+    $relativePath = To-ForwardSlash $relativePath
+    $outputInfo = Get-OutputPathInfo -ProjectRelativePath $relativePath
+    $targetPath = Join-Path $ProjectOutputRoot ($outputInfo.OutputRelative -replace '/', '\\')
     $targetDirectory = Split-Path -Parent $targetPath
 
     New-Item -ItemType Directory -Force -Path $targetDirectory | Out-Null
@@ -207,46 +238,36 @@ function Copy-ProjectFile {
     Copy-Item -Path $File.FullName -Destination $targetPath -Force
 }
 
-function Get-ExistingExtraPages {
-    param([string]$ProjectOutputRoot)
-
-    if (-not (Test-Path $ProjectOutputRoot)) {
-        return @()
-    }
-
-    return @(Get-ChildItem -Path $ProjectOutputRoot -File -Filter "*.md" |
-        Where-Object { $_.Name -ne "index.md" } |
-        Sort-Object Name)
-}
-
 function Generate-ProjectIndex {
     param(
         [string]$ProjectName,
         [string]$ProjectSourceRoot,
         [string]$ProjectOutputRoot,
-        [object[]]$MarkdownEntries,
-        [System.IO.FileInfo[]]$ExtraPages
+        [object[]]$DocEntries,
+        [object[]]$SupplementEntries
     )
 
     $lines = New-Object System.Collections.Generic.List[string]
     $lines.Add("# $ProjectName")
     $lines.Add("")
-    $lines.Add("这个项目来自 ``D:\obsidian\工作\$ProjectName``。站点会把该目录下的 Markdown 文档整理成一个独立项目，方便在线查看和分享。")
+    $lines.Add("这个项目来自 ``D:\obsidian\工作\$ProjectName``。现在项目文档和补充页都以 Obsidian 工作目录为唯一来源。")
     $lines.Add("")
     $lines.Add("## 项目概况")
     $lines.Add("")
-    $lines.Add("- Markdown 文档数：``$($MarkdownEntries.Count)``")
+    $lines.Add("- 文档数：``$($DocEntries.Count)``")
+    $lines.Add("- 补充页数：``$($SupplementEntries.Count)``")
     $lines.Add("- 源目录：``$ProjectSourceRoot``")
-    $lines.Add("- 站点目录：``$ProjectOutputRoot\文档``")
+    $lines.Add("- 站点文档目录：``$ProjectOutputRoot\文档``")
+    $lines.Add("- 站点补充页目录：``$ProjectOutputRoot\$supplementFolderName``")
     $lines.Add("")
 
-    if ($ExtraPages.Count -gt 0) {
+    if ($SupplementEntries.Count -gt 0) {
         $lines.Add("## 项目补充页")
         $lines.Add("")
 
-        foreach ($page in $ExtraPages) {
-            $pageTitle = [System.IO.Path]::GetFileNameWithoutExtension($page.Name)
-            $lines.Add("- [$pageTitle](./$($page.Name))")
+        foreach ($entry in @($SupplementEntries | Sort-Object NavRelativePath)) {
+            $title = [System.IO.Path]::GetFileNameWithoutExtension($entry.NavRelativePath)
+            $lines.Add("- [$title](./$supplementFolderName/$($entry.NavRelativePath))")
         }
 
         $lines.Add("")
@@ -255,15 +276,15 @@ function Generate-ProjectIndex {
     $lines.Add("## 原始文档入口")
     $lines.Add("")
 
-    if ($MarkdownEntries.Count -eq 0) {
-        $lines.Add("当前项目下还没有 Markdown 文档。")
+    if ($DocEntries.Count -eq 0) {
+        $lines.Add("当前项目下还没有原始文档。")
         $lines.Add("")
     } else {
         $lines.Add("| 文档 | 入口 |")
         $lines.Add("| ---- | ---- |")
 
-        foreach ($entry in ($MarkdownEntries | Sort-Object RelativePath)) {
-            $lines.Add("| ``$($entry.RelativePath)`` | [查看](./文档/$($entry.RelativePath)) |")
+        foreach ($entry in @($DocEntries | Sort-Object NavRelativePath)) {
+            $lines.Add("| ``$($entry.NavRelativePath)`` | [查看](./文档/$($entry.NavRelativePath)) |")
         }
 
         $lines.Add("")
@@ -271,9 +292,9 @@ function Generate-ProjectIndex {
 
     $lines.Add("## 使用建议")
     $lines.Add("")
-    $lines.Add("1. 先看本页，快速了解这个项目有哪些文档。")
-    $lines.Add("2. 再进入 ``文档/`` 目录按结构向下阅读。")
-    $lines.Add("3. 如果项目有补充页，可以把它们当作索引页、专题页或阅读导航。")
+    $lines.Add("1. 项目原始文档直接写在项目目录中。")
+    $lines.Add("2. 如果需要专题索引、阅读导航或总结页，请放到项目里的 ``$supplementFolderName/`` 目录。")
+    $lines.Add("3. 后续只需要在 Obsidian 的 ``D:\obsidian\工作`` 中维护内容，然后一键发布即可。")
     $lines.Add("")
 
     Write-Utf8File -Path (Join-Path $ProjectOutputRoot "index.md") -Content ($lines -join "`r`n")
@@ -294,82 +315,57 @@ function Generate-ProjectsIndex {
         $lines.Add("当前还没有可展示的项目。")
         $lines.Add("")
     } else {
-        $lines.Add("| 项目 | Markdown 数量 | 入口 |")
-        $lines.Add("| ---- | ---- | ---- |")
+        $lines.Add("| 项目 | 文档数 | 补充页数 | 入口 |")
+        $lines.Add("| ---- | ---- | ---- | ---- |")
 
-        foreach ($projectInfo in ($ProjectInfos | Sort-Object Name)) {
-            $lines.Add("| ``$($projectInfo.Name)`` | ``$($projectInfo.MarkdownCount)`` | [进入项目](./$($projectInfo.Name)/index.md) |")
+        foreach ($projectInfo in @($ProjectInfos | Sort-Object Name)) {
+            $lines.Add("| ``$($projectInfo.Name)`` | ``$($projectInfo.DocCount)`` | ``$($projectInfo.SupplementCount)`` | [进入项目](./$($projectInfo.Name)/index.md) |")
         }
 
         $lines.Add("")
         $lines.Add("## 推荐使用方式")
         $lines.Add("")
         $lines.Add("1. 先从项目总览进入，再打开对应项目主页。")
-        $lines.Add("2. 每个项目主页都会列出自动同步出来的 ``文档/`` 内容。")
-        $lines.Add("3. 如果某个项目有补充页，它们会直接出现在项目主页里。")
+        $lines.Add("2. 原始文档和补充页都维护在 Obsidian 的工作目录里。")
+        $lines.Add("3. 项目里的 ``$supplementFolderName/`` 目录适合放索引页、专题页和总结页。")
         $lines.Add("")
     }
 
     Write-Utf8File -Path (Join-Path $projectsRoot "index.md") -Content ($lines -join "`r`n")
 }
 
-function Add-ProjectDocNavEntries {
+function Add-NavEntries {
     param(
         [System.Collections.Generic.List[string]]$Lines,
         [string[]]$RelativePaths,
-        [string]$ProjectName,
-        [int]$Level,
-        [string]$PathPrefix = ""
+        [string]$OutputPrefix,
+        [int]$Level
     )
 
-    $files = @()
-    $directories = @()
+    $emittedDirectories = @{}
 
-    foreach ($relativePath in $RelativePaths) {
-        $remainingPath = $relativePath
-
-        if (-not [string]::IsNullOrWhiteSpace($PathPrefix)) {
-            $prefix = "$PathPrefix/"
-            if (-not $relativePath.StartsWith($prefix)) {
-                continue
-            }
-
-            $remainingPath = $relativePath.Substring($prefix.Length)
-        }
-
-        if ([string]::IsNullOrWhiteSpace($remainingPath)) {
+    foreach ($relativePath in @($RelativePaths | Sort-Object -Unique)) {
+        if ([string]::IsNullOrWhiteSpace($relativePath)) {
             continue
         }
 
-        $parts = $remainingPath -split '/', 2
-        if ($parts.Count -eq 1) {
-            $files += $parts[0]
-        } else {
-            $directories += $parts[0]
-        }
-    }
+        $segments = $relativePath -split '/'
 
-    foreach ($fileName in @($files | Sort-Object -Unique)) {
-        $title = [System.IO.Path]::GetFileNameWithoutExtension($fileName)
-        $relativeDocPath = if ([string]::IsNullOrWhiteSpace($PathPrefix)) {
-            $fileName
-        } else {
-            "$PathPrefix/$fileName"
-        }
+        if ($segments.Count -gt 1) {
+            for ($i = 0; $i -lt ($segments.Count - 1); $i++) {
+                $directoryPath = ($segments[0..$i] -join '/')
 
-        $Lines.Add(("{0}- {1}: 项目/{2}/文档/{3}" -f (Get-NavIndent $Level), $title, $ProjectName, $relativeDocPath))
-    }
+                if ($emittedDirectories.ContainsKey($directoryPath)) {
+                    continue
+                }
 
-    foreach ($directoryName in @($directories | Sort-Object -Unique)) {
-        $Lines.Add(("{0}- {1}:" -f (Get-NavIndent $Level), $directoryName))
-
-        $nextPrefix = if ([string]::IsNullOrWhiteSpace($PathPrefix)) {
-            $directoryName
-        } else {
-            "$PathPrefix/$directoryName"
+                $emittedDirectories[$directoryPath] = $true
+                $Lines.Add(("{0}- {1}:" -f (Get-NavIndent ($Level + $i)), $segments[$i]))
+            }
         }
 
-        Add-ProjectDocNavEntries -Lines $Lines -RelativePaths $RelativePaths -ProjectName $ProjectName -Level ($Level + 1) -PathPrefix $nextPrefix
+        $title = [System.IO.Path]::GetFileNameWithoutExtension($segments[$segments.Count - 1])
+        $Lines.Add(("{0}- {1}: {2}/{3}" -f (Get-NavIndent ($Level + $segments.Count - 1)), $title, $OutputPrefix, $relativePath))
     }
 }
 
@@ -446,23 +442,20 @@ function Write-MkDocsConfig {
 
     foreach ($projectInfo in @($ProjectInfos | Sort-Object Name)) {
         $projectName = $projectInfo.Name
-        $markdownRelativePaths = @($projectInfo.MarkdownEntries | Sort-Object RelativePath | ForEach-Object { $_.RelativePath })
+        $docPaths = @($projectInfo.DocEntries | Sort-Object NavRelativePath | ForEach-Object { $_.NavRelativePath })
+        $supplementPaths = @($projectInfo.SupplementEntries | Sort-Object NavRelativePath | ForEach-Object { $_.NavRelativePath })
 
         $lines.Add(("{0}- {1}:" -f (Get-NavIndent 0), $projectName))
         $lines.Add(("{0}- 项目主页: 项目/{1}/index.md" -f (Get-NavIndent 1), $projectName))
 
-        if ($projectInfo.ExtraPages.Count -gt 0) {
-            $lines.Add(("{0}- 补充页:" -f (Get-NavIndent 1)))
-
-            foreach ($page in @($projectInfo.ExtraPages | Sort-Object Name)) {
-                $pageTitle = [System.IO.Path]::GetFileNameWithoutExtension($page.Name)
-                $lines.Add(("{0}- {1}: 项目/{2}/{3}" -f (Get-NavIndent 2), $pageTitle, $projectName, $page.Name))
-            }
+        if ($supplementPaths.Count -gt 0) {
+            $lines.Add(("{0}- ${supplementFolderName}:" -f (Get-NavIndent 1)))
+            Add-NavEntries -Lines $lines -RelativePaths $supplementPaths -OutputPrefix "项目/$projectName/$supplementFolderName" -Level 2
         }
 
-        if ($markdownRelativePaths.Count -gt 0) {
+        if ($docPaths.Count -gt 0) {
             $lines.Add(("{0}- 文档:" -f (Get-NavIndent 1)))
-            Add-ProjectDocNavEntries -Lines $lines -RelativePaths $markdownRelativePaths -ProjectName $projectName -Level 2
+            Add-NavEntries -Lines $lines -RelativePaths $docPaths -OutputPrefix "项目/$projectName/文档" -Level 2
         }
     }
 
@@ -494,13 +487,12 @@ foreach ($projectDirectory in $projectDirectories) {
     $projectName = $projectDirectory.Name
     $projectSourceRoot = $projectDirectory.FullName
     $projectOutputRoot = Join-Path $projectsRoot $projectName
-    $generatedDocRoot = Join-Path $projectOutputRoot "文档"
 
-    if (Test-Path $generatedDocRoot) {
-        Remove-Item -Path $generatedDocRoot -Recurse -Force
+    if (Test-Path $projectOutputRoot) {
+        Remove-Item -Path $projectOutputRoot -Recurse -Force
     }
 
-    New-Item -ItemType Directory -Force -Path $generatedDocRoot | Out-Null
+    New-Item -ItemType Directory -Force -Path $projectOutputRoot | Out-Null
 
     $markdownEntries = @(Get-ProjectMarkdownEntries -ProjectSourceRoot $projectSourceRoot)
     $files = Get-ChildItem -Path $projectSourceRoot -Recurse -File -ErrorAction SilentlyContinue
@@ -509,14 +501,17 @@ foreach ($projectDirectory in $projectDirectories) {
         Copy-ProjectFile -File $file -ProjectSourceRoot $projectSourceRoot -ProjectOutputRoot $projectOutputRoot -MarkdownEntries $markdownEntries
     }
 
-    $extraPages = Get-ExistingExtraPages -ProjectOutputRoot $projectOutputRoot
-    Generate-ProjectIndex -ProjectName $projectName -ProjectSourceRoot $projectSourceRoot -ProjectOutputRoot $projectOutputRoot -MarkdownEntries $markdownEntries -ExtraPages $extraPages
+    $docEntries = @($markdownEntries | Where-Object { $_.Category -eq "document" })
+    $supplementEntries = @($markdownEntries | Where-Object { $_.Category -eq "supplement" })
+
+    Generate-ProjectIndex -ProjectName $projectName -ProjectSourceRoot $projectSourceRoot -ProjectOutputRoot $projectOutputRoot -DocEntries $docEntries -SupplementEntries $supplementEntries
 
     $projectInfos += [PSCustomObject]@{
-        Name          = $projectName
-        MarkdownCount = $markdownEntries.Count
-        MarkdownEntries = $markdownEntries
-        ExtraPages    = $extraPages
+        Name             = $projectName
+        DocCount         = $docEntries.Count
+        SupplementCount  = $supplementEntries.Count
+        DocEntries       = $docEntries
+        SupplementEntries = $supplementEntries
     }
 }
 
