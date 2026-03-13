@@ -1,0 +1,73 @@
+site_name: 一句话编程文档站
+site_description: 将 Obsidian 中的一句话编程文档发布为可在线浏览的站点
+site_author: Eric Lee
+
+theme:
+  name: material
+  language: zh
+  features:
+    - navigation.indexes
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - navigation.path
+    - navigation.footer
+    - search.highlight
+    - search.suggest
+    - content.code.copy
+    - content.tabs.link
+    - toc.follow
+  palette:
+    - scheme: default
+      primary: teal
+      accent: amber
+      toggle:
+        icon: material/weather-night
+        name: 切换到深色模式
+    - scheme: slate
+      primary: teal
+      accent: amber
+      toggle:
+        icon: material/weather-sunny
+        name: 切换到浅色模式
+
+plugins:
+  - search
+
+extra_css:
+  - stylesheets/extra.css
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+
+nav:
+  - 首页: index.md
+  - 一句话编程:
+      - 文档总览: 一句话编程/index.md
+      - 模块索引: 一句话编程/模块索引.md
+      - 协议速览: 一句话编程/协议速览.md
+      - 总体架构: 一句话编程/AI一句话编程.md
+      - 硬件接线: 一句话编程/硬件接线.md
+      - 下位机文档:
+          - 按键开关模块: 一句话编程/下位机文档/按键开关模块下位机开发文档.md
+          - 三色LED模块: 一句话编程/下位机文档/三色LED模块下位机开发文档.md
+          - 土壤湿度模块: 一句话编程/下位机文档/土壤湿度模块下位机开发文档.md
+          - 温湿度模块: 一句话编程/下位机文档/温湿度模块下位机开发文档.md
+          - PWM舵机模块: 一句话编程/下位机文档/PWM舵机模块下位机开发文档.md
+  - 站点维护:
+      - 发布与同步: 站点维护/发布与同步.md
